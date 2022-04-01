@@ -9,11 +9,11 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control
 
 It revalidates the cache in the background if stale-while-revalidate is set, allowing the cached response to be returned immediately.
 
-Cached responses are purged according to cache headers set to not fill the memory with expired cache.
+Cached responses are purged according to cache headers set, thereby avoiding filling the memory with expired cache.
 
-Age is set on cached responses to help control freshness, if response headers are passed on to a CDN.
+Age is set on cached responses to help control freshness, e.g., if response headers are passed on to a CDN.
 
-Designed to be a 1:1 replacement of node-fetch, exept for the include.
+Designed to be a 1:1 replacement of node-fetch, except for the include.
 
 The philosofy behing this module is that the origin should have correct headers and control cache times.
 If caching is configured in multiple layers, freshness is hard to control and you will have a hard time understanding where to change a configuration.
@@ -22,4 +22,4 @@ If there aren't any cache headers set in the origin, this module will not help y
 
 An example of usage can be found in example.mjs
 
-Example is requesting a site running a .NET site I have made for testing this module https://github.com/Henr1k80/CacheHeaderTestingApi
+The example is requesting a site running a .NET site I have made for testing this module https://github.com/Henr1k80/CacheHeaderTestingApi
