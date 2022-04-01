@@ -1,6 +1,6 @@
 {
   "name": "node-caching-fetch",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "A cache for node-fetch that caches according to response cache headers, incl. stale-while-revalidate & stale-while-error with background revalidation",
   "main": "index.js",
   "type": "module",

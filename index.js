@@ -13,18 +13,19 @@ import {default as nodeFetch} from 'node-fetch';
 //     url: RequestInfo;
 //     options_: RequestInit;
 //     canBeRevalidated: boolean;
-//     mustRevalidateBeforeUse: boolean;
-//     timeRevalidationCanStart: Date;
+//     mustRevalidateWhenExpired: boolean;
+//     timeRevalidationMustStart: Date;
 //     cachedTime: Date = new Date();
 //     purgeFromCacheTimeoutID: number;
 //     secondsBeforePurgingFromCache: number;
-//     secondsOfAllowedStaleCache: number;
+//     secondsOfAllowedFreshCache: number;
 //     secondsOfServingStaleWhileError: number;
 // }
 
 const msDelayForRevalidation = 10;
 const secondsDelayBeforeNextRevalidationAttempt = 10;
 const secondsDelayBeforeNextRevalidationAttemptOnError = secondsDelayBeforeNextRevalidationAttempt;
+const secondsAllowedInCacheWhenRequiringRevalidation = 3 * 60;
 let debugLogging;
 
 export function enableDebugLogging(value = true) {
@@ -33,10 +34,10 @@ export function enableDebugLogging(value = true) {
 
 const cache = {};
 
-function resetTimeWhereRevalidationCanStart(cacheObject) {
-    const timeRevalidationCanStart = new Date();
-    timeRevalidationCanStart.setUTCMilliseconds(timeRevalidationCanStart.getUTCMilliseconds() + (cacheObject.secondsOfAllowedStaleCache * 1000));
-    cacheObject.timeRevalidationCanStart = timeRevalidationCanStart;
+function resetTimeWhereRevalidationMustStart(cacheObject) {
+    const timeRevalidationMustStart = new Date();
+    timeRevalidationMustStart.setUTCMilliseconds(timeRevalidationMustStart.getUTCMilliseconds() + (cacheObject.secondsOfAllowedFreshCache * 1000));
+    cacheObject.timeRevalidationMustStart = timeRevalidationMustStart;
 }
 
 function initHeaders(cacheObject) {
@@ -72,6 +73,7 @@ function setRevalidationHeaders(cacheObject) {
 
 function storeInCacheIfCacheable(response, cacheKey, url, options_) {
     if (!response.ok) {
+        // not caching, not OK response
         return;
     }
     const cacheControlHeader = response.headers.get('cache-control'); // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control
@@ -125,59 +127,70 @@ function storeInCacheIfCacheable(response, cacheKey, url, options_) {
             }
         }
     }
+    // we are allowed to cache and secondsOfAllowedCaching is positive
     setRevalidationHeaders(cacheObject);
-
-    let secondsOfAllowedServingOfStaleWhileRevalidating = 0;
-    const staleWhileRevalidateMatches = cacheControlHeader.match(/stale-while-revalidate=(\d+)/);
-    if (staleWhileRevalidateMatches) {
-        secondsOfAllowedServingOfStaleWhileRevalidating = parseInt(staleWhileRevalidateMatches[1], 10);
-        if (debugLogging) {
-            console.log(`Using stale-while-revalidate: ${secondsOfAllowedServingOfStaleWhileRevalidating} for ${url}`);
-        }
-    }
-
-    const staleWhileErrorMatches = cacheControlHeader.match(/stale-while-error=(\d+)/);
-    if (staleWhileErrorMatches) {
-        const secondsOfServingStaleWhileError = parseInt(staleWhileErrorMatches[1], 10);
-        if (secondsOfServingStaleWhileError > 0) {
-            cacheObject.secondsOfServingStaleWhileError = secondsOfServingStaleWhileError;
-            if (debugLogging) {
-                console.log(`Using stale-while-error: ${secondsOfServingStaleWhileError} for ${url}`);
-            }
-        }
-    }
-
     let secondsBeforePurgingFromCache = secondsOfAllowedCaching;
-    if (secondsOfAllowedServingOfStaleWhileRevalidating > 0) {
-        // calculate time where we need to start revalidate
-        cacheObject.secondsOfAllowedStaleCache = secondsOfAllowedCaching;
-        resetTimeWhereRevalidationCanStart(cacheObject);
-        // allow cache to live longer before being purged
-        secondsBeforePurgingFromCache += secondsOfAllowedServingOfStaleWhileRevalidating;
-    } else {
-        // stale-while-revalidate will take precedence over these.
-        // They are conflicting and resolving is not described, so it is my decision to do this for highest cacheability
-        if (cacheControlHeader.match(/\b(?:must-revalidate|proxy-revalidate|no-cache)\b/gi)) {
-            if (cacheObject.canBeRevalidated) {
-                // this cache needs to be revalidated with a request with either If-None-Match or If-Unmodified-Since request
-                // this check can be significantly cheaper as a 304 is just an empty response and does not need to create response models etc.
-                // https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/304
-                cacheObject.mustRevalidateBeforeUse = true;
+    // check if we are allowed to serve cached content without revalidating
+    if (cacheControlHeader.match(/\b(?:must-revalidate|proxy-revalidate|no-cache)\b/gi)) {
+        // we are allowed to cache, but there are certain rules for revalidation
+        // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control#no-cache
+        if (cacheObject.canBeRevalidated) {
+            // this cache needs to be revalidated with a request with either If-None-Match or If-Unmodified-Since request
+            // this check can be significantly cheaper as a 304 is just an empty response and does not need to create & return response models etc.
+            // https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/304
+            cacheObject.mustRevalidateWhenExpired = true;
+            if (cacheControlHeader.match(/no-cache/)) {
+                // this cache needs to be revalidated immediately
+                cacheObject.secondsOfAllowedFreshCache = 0;
                 if (debugLogging) {
-                    console.log(`Revalidating before every use because of cache control header: ${cacheControlHeader} for ${url}`);
+                    console.log(`Revalidating before every use because of no-cache cache control header for ${url}`);
                 }
             } else {
-                // no etag or Last-Modified to revalidate against, so it makes no sense to cache
+                // this cache can be served fresh for some time
+                cacheObject.secondsOfAllowedFreshCache = secondsOfAllowedCaching;
                 if (debugLogging) {
-                    console.log(`Not caching because there is no etag or Last-Modified to revalidate against and revalidation is required in cache control header: ${cacheControlHeader} for ${url}`);
+                    console.log(`Forced revalidation after ${secondsOfAllowedCaching}s because of cache control header: ${cacheControlHeader} for ${url}`);
                 }
-                return;
             }
+            // set the cache to live some time for revalidation before being purged
+            secondsBeforePurgingFromCache = cacheObject.secondsOfAllowedFreshCache + secondsAllowedInCacheWhenRequiringRevalidation;
         } else {
-            // we can cache, but there is not any cache header information about revalidation
-            // consider making options to set up an automatic revalidation in the module?
+            // no etag or Last-Modified to revalidate against, so it makes no sense to cache, just do a regular request every time
+            if (debugLogging) {
+                console.log(`Not caching because there is no etag or Last-Modified to revalidate against and revalidation is required in cache control header: ${cacheControlHeader} for ${url}`);
+            }
+            return;
+        }
+    } else {
+        // check if we are allowed to serve stale cached responses
+        const staleWhileRevalidateMatches = cacheControlHeader.match(/stale-while-revalidate=(\d+)/);
+        if (staleWhileRevalidateMatches) {
+            const secondsOfAllowedServingOfStaleWhileRevalidating = parseInt(staleWhileRevalidateMatches[1], 10);
+            if (secondsOfAllowedServingOfStaleWhileRevalidating > 0) {
+                // calculate time where we need to start revalidate
+                cacheObject.secondsOfAllowedFreshCache = secondsOfAllowedCaching;
+                resetTimeWhereRevalidationMustStart(cacheObject);
+                // allow cache to live longer before being purged
+                secondsBeforePurgingFromCache += secondsOfAllowedServingOfStaleWhileRevalidating;
+            }
+            if (debugLogging) {
+                console.log(`Using stale-while-revalidate: ${secondsOfAllowedServingOfStaleWhileRevalidating} for ${url}`);
+            }
+        }
+
+        // check if we are allowed to serve stale response if the request fails
+        const staleWhileErrorMatches = cacheControlHeader.match(/stale-while-error=(\d+)/);
+        if (staleWhileErrorMatches) {
+            const secondsOfServingStaleWhileError = parseInt(staleWhileErrorMatches[1], 10);
+            if (secondsOfServingStaleWhileError > 0) {
+                cacheObject.secondsOfServingStaleWhileError = secondsOfServingStaleWhileError;
+                if (debugLogging) {
+                    console.log(`Using stale-while-error: ${secondsOfServingStaleWhileError} for ${url}`);
+                }
+            }
         }
     }
+
     cacheObject.secondsBeforePurgingFromCache = secondsBeforePurgingFromCache;
     cache[cacheKey] = cacheObject;
     resetPurgeFromCache(cacheObject);
@@ -205,20 +218,20 @@ function resetPurgeFromCacheBecauseOfError(cacheObject) {
 }
 
 function startRevalidateResponseIfNeeded(cachedObject) {
-    const timeRevalidationCanStart = cachedObject.timeRevalidationCanStart;
-    if (!timeRevalidationCanStart) {
+    const timeRevalidationMustStart = cachedObject.timeRevalidationMustStart;
+    if (!timeRevalidationMustStart) {
         return; // no time set for when to revalidate
     }
     const now = new Date();
-    if (timeRevalidationCanStart > now) {
+    if (timeRevalidationMustStart > now) {
         return; // not time to revalidate yet
     }
-    // Setting new timeRevalidationCanStart so other requests doesn't start new revalidations
+    // Setting new timeRevalidationMustStart so other requests doesn't start new revalidations
     // not using lock, so in other languages there could be more threads revalidating, if they start the check at the same time.
     // But it does not look like there are any issues with this as node is single threaded https://blog.logrocket.com/node-js-multithreading-worker-threads-why-they-matter/
     const timeNextRevalidationCanStart = new Date();
     timeNextRevalidationCanStart.setUTCMilliseconds(timeNextRevalidationCanStart.getUTCMilliseconds() + secondsDelayBeforeNextRevalidationAttempt * 1000)
-    cachedObject.timeRevalidationCanStart = timeNextRevalidationCanStart;
+    cachedObject.timeRevalidationMustStart = timeNextRevalidationCanStart;
     // execute the revalidate later, but ASAP, not blocking this thread and hopefully not the request fetching
     setTimeout(async () => {
         await revalidate(cachedObject);
@@ -235,19 +248,19 @@ async function revalidate(cachedObject) {
         // not modified
         // reset eviction timer
         resetPurgeFromCache(cachedObject);
-        // reset timeRevalidationCanStart
-        resetTimeWhereRevalidationCanStart(cachedObject);
+        // reset timeRevalidationMustStart
+        resetTimeWhereRevalidationMustStart(cachedObject);
         // reset cache age
         cachedObject.cachedTime = new Date();
         if (debugLogging) {
             const msToRevalidate = new Date() - timeStarted;
-            console.log(`Cache revalidated in ${msToRevalidate}ms, time reset for earliest next revalidation: ${cachedObject.timeRevalidationCanStart}, eviction in ${cachedObject.secondsBeforePurgingFromCache} seconds`);
+            console.log(`Cache revalidated in ${msToRevalidate}ms, time reset for earliest next revalidation: ${cachedObject.timeRevalidationMustStart}, eviction in ${cachedObject.secondsBeforePurgingFromCache} seconds`);
         }
         return cachedObject.response;
     } else {
         if (fetchResponse.ok) {
             // not Not modified, it should indicate that the response has actually changed
-            // set cache with ordinary means (reset eviction timer, sets new timeRevalidationCanStart)
+            // set cache with ordinary means (reset eviction timer, sets new timeRevalidationMustStart)
             storeInCacheIfCacheable(fetchResponse, cachedObject.cacheKey, cachedObject.url, cachedObject.options_);
             return fetchResponse;
         } else {
@@ -261,7 +274,7 @@ async function revalidate(cachedObject) {
             // increase timeNextRevalidationCanStart with a sane value, so we do not overburden the failing server
             const timeNextRevalidationCanStart = new Date();
             timeNextRevalidationCanStart.setUTCMilliseconds(timeNextRevalidationCanStart.getUTCMilliseconds() + secondsDelayBeforeNextRevalidationAttemptOnError * 1000)
-            cachedObject.timeRevalidationCanStart = timeNextRevalidationCanStart;
+            cachedObject.timeRevalidationMustStart = timeNextRevalidationCanStart;
             setAge(cachedObject);
             return cachedObject.response; // return the cached response
         }
@@ -289,9 +302,9 @@ export default async function fetch(url, options_) {
     const cacheKey = getCacheKey(url, options_);
     const cachedObject = cache[cacheKey];
     if (cachedObject) {
-        if (cachedObject.mustRevalidateBeforeUse) {
-            // we must call the server to validate the cache before usage
-            // a 304 Not Modified is usually faster than getting the entire response again
+        if (cachedObject.mustRevalidateWhenExpired && cachedObject.timeRevalidationMustStart < new Date()) {
+            // We must call the server to validate the cache before usage
+            // A 304 Not Modified is usually faster than getting the entire response again
             // https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/304
             return revalidate(cachedObject);
         }
