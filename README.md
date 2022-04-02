@@ -26,6 +26,6 @@ HTTP headers are CDN agnostic, so you do not need to learn and setup a new CDN, 
 You avoid documenting what caching you configured in SSR or CDN & how and why you did so, leave that to the origin.
 Bad news is that you need someone with HTTP cache header knowledge to create the endpoints you use. A common error here is to create a POST endpoint because it is "prettier" to post a complex request model, than to have a large query string. Or have arguments in custom headers. Problem is that most CDNs do not support caching or varying by these parameters https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching#targets_of_caching_operations.
 You need to design the endpoint to be cacheable, if performance is a feature. I have seen many ignore this, until it is too late.
-Please require proper methods of caching and control up front to avoid this, parameters can be tweaked later.
+Please require proper methods of caching and control up front to avoid this, parameters can be tweaked later. This will also help serving responses from CDN edge nodes (or web server response cache if configured)
 
 The example is requesting a site running a .NET site I have made for testing this module https://github.com/Henr1k80/CacheHeaderTestingApi
