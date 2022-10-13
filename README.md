@@ -21,8 +21,8 @@ If there aren't any cache headers set in the origin, this module will not help y
 An example of usage can be found in example.mjs
 
 The philosophy behind this module is, that the origin should have correct headers and control cache times, one place to rule them all, cache-wise.
-If caching is configured and controlled in multiple layers (backend, SSR, CDN etc.), freshness is hard to control, and you will have a hard time understanding where to change a configuration and have a hard time controlling the freshness.
-HTTP headers are CDN agnostic, so you do not need to learn and setup a new CDN, if you change provider.
+If caching is configured and controlled in multiple layers (backend, BFF, SSR, CDN, clientside etc.), freshness is hard to control, and you will have a hard time understanding where to change a configuration and have a hard time controlling the freshness.
+HTTP headers are CDN agnostic, so you do not need to learn, setup and integrate to a new CDN, if you change provider.
 You avoid documenting what caching you configured in SSR or CDN & how and why you did so, leave that to the origin.
 Bad news is that you need someone with HTTP cache header knowledge to create the endpoints you use. A common error here is to create a POST endpoint because it is "prettier" to post a complex request model, than to have a large query string. Or have arguments in custom headers. Problem is that most CDNs do not support caching or varying by these parameters https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching#targets_of_caching_operations.
 You need to design the endpoint to be cacheable, if performance is a feature. I have seen many ignore this, until it is too late.
