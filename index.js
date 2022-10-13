@@ -127,6 +127,19 @@ function storeInCacheIfCacheable(response, cacheKey, url, options_) {
             }
         }
     }
+    // check if the response already have an Age https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Age
+    let ageInSeconds = 0;
+    const ageHeader = response.headers.get('Age');
+    if (ageHeader && ageHeader.length > 0) {
+        ageInSeconds = parseInt(ageHeader, 10);
+        if (ageInSeconds > 0) {
+            cacheObject.cachedTime.setUTCMilliseconds(cacheObject.cachedTime.getUTCMilliseconds() - (ageInSeconds * 1000))
+            if (debugLogging) {
+                console.log(`Found existing cache age: ${ageInSeconds} seconds for ${url}`);
+            }
+        }
+    }
+
     // we are allowed to cache and secondsOfAllowedCaching is positive
     setRevalidationHeaders(cacheObject);
     let secondsBeforePurgingFromCache = secondsOfAllowedCaching;
@@ -147,13 +160,13 @@ function storeInCacheIfCacheable(response, cacheKey, url, options_) {
                 }
             } else {
                 // this cache can be served fresh for some time
-                cacheObject.secondsOfAllowedFreshCache = secondsOfAllowedCaching;
+                cacheObject.secondsOfAllowedFreshCache = secondsOfAllowedCaching - ageInSeconds;
                 if (debugLogging) {
                     console.log(`Forced revalidation after ${secondsOfAllowedCaching}s because of cache control header: ${cacheControlHeader} for ${url}`);
                 }
             }
             // set the cache to live some time for revalidation before being purged
-            secondsBeforePurgingFromCache = cacheObject.secondsOfAllowedFreshCache + secondsAllowedInCacheWhenRequiringRevalidation;
+            secondsBeforePurgingFromCache = cacheObject.secondsOfAllowedFreshCache + secondsAllowedInCacheWhenRequiringRevalidation - ageInSeconds;
         } else {
             // no etag or Last-Modified to revalidate against, so it makes no sense to cache, just do a regular request every time
             if (debugLogging) {
@@ -168,13 +181,13 @@ function storeInCacheIfCacheable(response, cacheKey, url, options_) {
             const secondsOfAllowedServingOfStaleWhileRevalidating = parseInt(staleWhileRevalidateMatches[1], 10);
             if (secondsOfAllowedServingOfStaleWhileRevalidating > 0) {
                 // calculate time where we need to start revalidate
-                cacheObject.secondsOfAllowedFreshCache = secondsOfAllowedCaching;
+                cacheObject.secondsOfAllowedFreshCache = secondsOfAllowedCaching - ageInSeconds;
                 resetTimeWhereRevalidationMustStart(cacheObject);
                 // allow cache to live longer before being purged
                 secondsBeforePurgingFromCache += secondsOfAllowedServingOfStaleWhileRevalidating;
-            }
-            if (debugLogging) {
-                console.log(`Using stale-while-revalidate: ${secondsOfAllowedServingOfStaleWhileRevalidating} for ${url}`);
+                if (debugLogging) {
+                    console.log(`Using stale-while-revalidate: ${secondsOfAllowedServingOfStaleWhileRevalidating} for ${url}`);
+                }
             }
         }
 
@@ -183,14 +196,20 @@ function storeInCacheIfCacheable(response, cacheKey, url, options_) {
         if (staleWhileErrorMatches) {
             const secondsOfServingStaleWhileError = parseInt(staleWhileErrorMatches[1], 10);
             if (secondsOfServingStaleWhileError > 0) {
-                cacheObject.secondsOfServingStaleWhileError = secondsOfServingStaleWhileError;
+                cacheObject.secondsOfServingStaleWhileError = secondsOfServingStaleWhileError - ageInSeconds;
                 if (debugLogging) {
                     console.log(`Using stale-while-error: ${secondsOfServingStaleWhileError} for ${url}`);
                 }
             }
         }
     }
-
+    secondsBeforePurgingFromCache -= ageInSeconds;
+    if (secondsBeforePurgingFromCache < 1) {
+        if (debugLogging) {
+            console.log(`The Age: ${ageInSeconds} for this response means that it is already expired and will not be cached for ${url}`);
+        }
+        return;
+    }
     cacheObject.secondsBeforePurgingFromCache = secondsBeforePurgingFromCache;
     cache[cacheKey] = cacheObject;
     resetPurgeFromCache(cacheObject);
